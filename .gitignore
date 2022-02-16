@@ -1,0 +1,10 @@
+.vscode
+.idea
+
+boltdb/*
+Logs/*
+backups/*
+
+backup/devnet/config.json
+poly.dat
+main
