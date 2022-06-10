@@ -114,11 +114,11 @@ func (v *Voter) fetchLockDepositEvents(height uint32) error {
 						return fmt.Errorf("notification.State.Value error: Wrong length of states")
 					}
 					// when empty, relay everything
-					if v.config.NeoConfig.NtorContract != "" {
+					if v.config.NeoConfig.N2PContract != "" {
 						// this loop check it is for this specific contract
 						for index, ntf := range notifications {
 							nc, _ := helper.UInt160FromString(ntf.Contract)
-							if "0x"+nc.String() != v.config.NeoConfig.NtorContract {
+							if "0x"+nc.String() != v.config.NeoConfig.N2PContract {
 								if index < len(notifications)-1 {
 									continue
 								}

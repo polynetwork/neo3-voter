@@ -27,10 +27,10 @@ type PolyConfig struct {
 }
 
 type NeoConfig struct {
-	SideChainId  uint64
-	RpcUrlList   []string
-	CCMC         string // big endian string, like 0x1234567890abcdef123456781234567812345678
-	NtorContract string // big endian string
+	SideChainId uint64
+	RpcUrlList  []string
+	CCMC        string // big endian string, like 0x1234567890abcdef123456781234567812345678
+	N2PContract string // neo to poly contract,  big endian string
 }
 
 type ForceConfig struct {
