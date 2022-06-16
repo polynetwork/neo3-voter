@@ -23,7 +23,7 @@ type Voter struct {
 	chainId     *big.Int
 	signer      *zion.ZionSigner
 	zionClients []*zion.ZionTools
-	zionCCMs     []*cross_chain_manager_abi.CrossChainManager
+	zionCCMs    []*cross_chain_manager_abi.CrossChainManager
 	zionCcmAddr common.Address
 	zidx        int
 
@@ -114,7 +114,7 @@ func (v *Voter) Start() {
 	}
 	var wg sync.WaitGroup
 	GoFunc(&wg, v.monitorNeo)
-	GoFunc(&wg, v.monitorPoly)
+	GoFunc(&wg, v.monitorZion)
 	wg.Wait()
 }
 

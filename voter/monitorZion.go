@@ -46,7 +46,7 @@ RETRY:
 	return
 }
 
-func (v *Voter) monitorPoly() {
+func (v *Voter) monitorZion() {
 	nextHeight := v.getZionStartHeight()
 
 	for {
@@ -161,12 +161,12 @@ func (v *Voter) commitSig(height uint64, subject, sig []byte) (txHash string, er
 	}
 
 	callMsg := ethereum.CallMsg{
-		From:       v.signer.Address,
-		To:         &utils.SignatureManagerContractAddress,
-		Gas:        0,
-		GasPrice:   gasPrice,
-		Value:      big.NewInt(0),
-		Data:       data,
+		From:     v.signer.Address,
+		To:       &utils.SignatureManagerContractAddress,
+		Gas:      0,
+		GasPrice: gasPrice,
+		Value:    big.NewInt(0),
+		Data:     data,
 	}
 	gasLimit, err := c.EstimateGas(timerCtx, callMsg)
 	if err != nil {
