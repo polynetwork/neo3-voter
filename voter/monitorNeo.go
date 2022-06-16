@@ -1,18 +1,23 @@
 package voter
 
 import (
+	"context"
+	"encoding/binary"
 	"fmt"
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/contracts/native/go_abi/cross_chain_manager_abi"
+	common2 "github.com/ethereum/go-ethereum/contracts/native/header_sync/common"
+	"github.com/ethereum/go-ethereum/contracts/native/utils"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/joeqian10/neo3-gogogo/crypto"
 	"github.com/joeqian10/neo3-gogogo/helper"
 	"github.com/joeqian10/neo3-gogogo/io"
 	"github.com/joeqian10/neo3-gogogo/mpt"
 	"github.com/joeqian10/neo3-gogogo/rpc"
 	"github.com/joeqian10/neo3-gogogo/rpc/models"
-	"github.com/polynetwork/neo3-voter/common"
-	pCommon "github.com/polynetwork/poly/common"
-	hsCommon "github.com/polynetwork/poly/native/service/header_sync/common"
-	"github.com/polynetwork/poly/native/service/header_sync/neo"
-	polyUtils "github.com/polynetwork/poly/native/service/utils"
+	"math/big"
 	"strconv"
 	"strings"
 	"time"
@@ -20,9 +25,14 @@ import (
 
 const EMPTY = ""
 
-var NeoUsefulBlockNum = uint32(1)
+var NeoUsefulBlockNum = uint64(1)
 
-func (v *Voter) getNeoStartHeight() (startHeight uint32) {
+func (v *Voter) pickNeoClient() *rpc.RpcClient {
+	v.idx = randIdx(len(v.zionClients))
+	return v.neoClients[v.idx]
+}
+
+func (v *Voter) getNeoStartHeight() (startHeight uint64) {
 	startHeight = v.config.ForceConfig.NeoStartHeight
 	if startHeight > 0 {
 		return
@@ -34,29 +44,54 @@ func (v *Voter) getNeoStartHeight() (startHeight uint32) {
 	}
 
 RPC:
-	c := v.chooseClient()
+	c := v.pickNeoClient()
 	response := c.GetBlockCount()
 	if response.HasError() {
 		Log.Errorf("GetBlockCount error: %s, client: %s", response.GetErrorInfo(), c.Endpoint.String())
 		goto RPC
 	}
-	startHeight = uint32(response.Result - 1)
+	startHeight = uint64(response.Result - 1)
 	return
 }
 
-func (v *Voter) monitorNeo() {
+// GetLatestSyncHeightOnZion - get the synced NEO blockHeight from zion
+func (v *Voter) GetLatestSyncHeightOnZion(neoChainID uint64) (uint64, error) {
+	var id [8]byte
+	binary.LittleEndian.PutUint64(id[:], neoChainID)
+RETRY:
+	c := v.pickZionClient()
+	heightBytes, err := c.GetStorage(utils.HeaderSyncContractAddress, append([]byte(common2.CURRENT_HEADER_HEIGHT), id[:]...))
+	if err != nil {
+		Log.Errorf("getStorage error: %v, retrying", err)
+		goto RETRY
+	}
+	if heightBytes == nil {
+		return 0, fmt.Errorf("get side chain height failed, height store is nil")
+	}
+	var height uint64
+	if len(heightBytes) > 7 {
+		height = binary.LittleEndian.Uint64(heightBytes)
+	} else if len(heightBytes) > 3 {
+		height = uint64(binary.LittleEndian.Uint32(heightBytes))
+	} else {
+		err = fmt.Errorf("Failed to decode heightBytes, %v", heightBytes)
+	}
+	height++ // means the next
+	return height, nil
+}
 
+func (v *Voter) monitorNeo() {
 	nextHeight := v.getNeoStartHeight()
 
 	for {
-		c := v.chooseClient()
+		c := v.pickNeoClient()
 		response := c.GetBlockCount()
 		if response.HasError() {
 			Log.Warnf("GetBlockCount failed: %s", response.GetErrorInfo())
 			sleep()
 			continue
 		}
-		height := uint32(response.Result - 1)
+		height := uint64(response.Result - 1)
 		if height < nextHeight+NeoUsefulBlockNum {
 			sleep()
 			continue
@@ -66,18 +101,22 @@ func (v *Voter) monitorNeo() {
 			Log.Infof("process neo height: %d", nextHeight)
 			err := v.fetchLockDepositEvents(nextHeight)
 			if err != nil {
-				Log.Warnf("fetchLockDepositEvents failed:%v", err)
+				Log.Warnf("fetchLockDepositEvents failed: %v", err)
 				sleep()
 				continue
 			}
 			nextHeight++
 		}
+		err := v.bdb.PutNeoHeight(nextHeight)
+		if err != nil {
+			Log.Errorf("UpdateFlowHeight failed: %v", err)
+		}
 		time.Sleep(time.Second * 2)
 	}
 }
 
-func (v *Voter) fetchLockDepositEvents(height uint32) error {
-	c := v.chooseClient()
+func (v *Voter) fetchLockDepositEvents(height uint64) error {
+	c := v.pickNeoClient()
 	blockResponse := c.GetBlock(strconv.Itoa(int(height)))
 	if blockResponse.HasError() {
 		return fmt.Errorf("neoSdk.GetBlockByIndex error: %s", blockResponse.GetErrorInfo())
@@ -114,15 +153,15 @@ func (v *Voter) fetchLockDepositEvents(height uint32) error {
 						return fmt.Errorf("notification.State.Value error: Wrong length of states")
 					}
 					// when empty, relay everything
-					if v.config.NeoConfig.N2PContract != "" {
+					if v.config.NeoConfig.N2ZContract != "" {
 						// this loop check it is for this specific contract
 						for index, ntf := range notifications {
 							nc, _ := helper.UInt160FromString(ntf.Contract)
-							if "0x"+nc.String() != v.config.NeoConfig.N2PContract {
+							if "0x"+nc.String() != v.config.NeoConfig.N2ZContract {
 								if index < len(notifications)-1 {
 									continue
 								}
-								Log.Infof("This cross chain tx is not for this specific contract.")
+								Log.Infof("This cross chain tx is not from the expected contract.")
 								goto NEXT
 							} else {
 								break
@@ -136,11 +175,11 @@ func (v *Voter) fetchLockDepositEvents(height uint32) error {
 					}
 					key = helper.BytesToHex(temp)
 					//get relay chain sync height
-					latestSyncHeight, err := v.GetLatestSyncHeightOnPoly(v.config.NeoConfig.SideChainId)
+					latestSyncHeight, err := v.GetLatestSyncHeightOnZion(v.config.NeoConfig.SideChainId)
 					if err != nil {
 						return fmt.Errorf("GetCurrentRelayChainSyncHeight error: %s", err)
 					}
-					var passed uint32
+					var passed uint64
 					if height >= latestSyncHeight {
 						passed = height
 					} else {
@@ -171,41 +210,21 @@ func (v *Voter) fetchLockDepositEvents(height uint32) error {
 	return nil
 }
 
-// GetLatestSyncHeightOnPoly :get the synced NEO blockHeight from poly
-func (v *Voter) GetLatestSyncHeightOnPoly(neoChainID uint64) (uint32, error) {
-	contractAddress := polyUtils.HeaderSyncContractAddress
-	neoChainIDBytes := common.GetUint64Bytes(neoChainID)
-	key := common.ConcatKey([]byte(hsCommon.CONSENSUS_PEER), neoChainIDBytes)
-	value, err := v.polySdk.ClientMgr.GetStorage(contractAddress.ToHexString(), key)
-	if err != nil {
-		return 0, fmt.Errorf("getStorage error: %s", err)
-	}
-	neoConsensusPeer := new(neo.NeoConsensus)
-	if err := neoConsensusPeer.Deserialization(pCommon.NewZeroCopySource(value)); err != nil {
-		return 0, fmt.Errorf("neoconsensus peer deserialize err: %s", err)
-	}
-
-	height := neoConsensusPeer.Height
-	height++
-	return height, nil
-}
-
-func (v *Voter) commitVote(key string, height uint32) (string, error) {
-
-	c := v.chooseClient()
+func (v *Voter) commitVote(key string, height uint64) (string, error) {
+	c := v.neoClients[v.idx]
 	//get current state height
-	var stateHeight uint32 = 0
+	var stateHeight uint64 = 0
 	for stateHeight < height {
 		res := c.GetStateHeight()
 		if res.HasError() {
 			return EMPTY, fmt.Errorf("neoSdk.GetStateHeight error: %s", res.GetErrorInfo())
 		}
-		stateHeight = res.Result.ValidateRootIndex
+		stateHeight = uint64(res.Result.ValidateRootIndex)
 	}
 
 	// get state root
 	srGot := false
-	var height2 uint32
+	var height2 uint64
 	stateRoot := mpt.StateRoot{}
 	if height >= v.neoStateRootHeight {
 		height2 = height
@@ -213,7 +232,7 @@ func (v *Voter) commitVote(key string, height uint32) (string, error) {
 		height2 = v.neoStateRootHeight
 	}
 	for !srGot {
-		res2 := c.GetStateRoot(height2)
+		res2 := c.GetStateRoot(uint32(height2))
 		if res2.HasError() {
 			return EMPTY, fmt.Errorf("neoSdk.GetStateRootByIndex error: %s", res2.GetErrorInfo())
 		}
@@ -241,34 +260,107 @@ func (v *Voter) commitVote(key string, height uint32) (string, error) {
 	}
 	//Log.Info("proof: %s", helper.BytesToHex(proof))
 
-	// following is for testing only
-	//id, k, proofs, err := mpt.ResolveProof(proof)
-	//root, _ := helper.UInt256FromString(stateRoot.RootHash)
-	//value, err := mpt.VerifyProof(root, id, k, proofs)
+	id, k, proofs, err := mpt.ResolveProof(proof)
+	if err != nil {
+		return EMPTY, fmt.Errorf("ResolveProof error: %s", err)
+	}
+	root, _ := helper.UInt256FromString(stateRoot.RootHash)
+	value, err := mpt.VerifyProof(root, id, k, proofs)
+	if err != nil {
+		return EMPTY, fmt.Errorf("VerifyProof error: %s", err)
+	}
+	cctp, err := DeserializeCrossChainTxParameter(value, 0)
+	if err != nil {
+		return EMPTY, fmt.Errorf("DeserializeCrossChainTxParameter error: %s", err)
+	}
 	//Log.Infof("value: %s", helper.BytesToHex(value))
 
-	//sending SyncProof transaction to
-	txHash, err := v.polySdk.Native.Ccm.ImportOuterTransfer(
+	// sending SyncProof transaction to zion
+	zionHash, err := v.makeZionTx(height, proof, crossChainMsg)
+	if err != nil {
+		if strings.Contains(err.Error(), "tx already done") {
+			Log.Infof("tx already imported, source tx hash: %s", helper.BytesToHex(cctp.TxHash))
+			return EMPTY, nil
+		} else {
+			return EMPTY, fmt.Errorf("makeZionTx error: %v, height: %d, crossChainMsg: %s, proof: %s",
+				err, height, helper.BytesToHex(crossChainMsg), helper.BytesToHex(proof))
+		}
+	}
+	return zionHash, nil
+}
+
+func (v *Voter) makeZionTx(height uint64, proof []byte, crossChainMsg []byte) (string, error) {
+	duration := time.Second * 30
+	timerCtx, cancelFunc := context.WithTimeout(context.Background(), duration)
+	defer cancelFunc()
+
+	ethCli := v.zionClients[v.zidx].GetEthClient()
+	gasPrice, err := ethCli.SuggestGasPrice(timerCtx)
+	if err != nil {
+		return EMPTY, fmt.Errorf("SuggestGasPrice error: %v", err)
+	}
+	ccmAbi, err := abi.JSON(strings.NewReader(cross_chain_manager_abi.CrossChainManagerABI))
+	if err != nil {
+		return EMPTY, fmt.Errorf("abi.JSON CrossChainManagerABI error: %v", err)
+	}
+	data, err := ccmAbi.Pack("importOuterTransfer",
 		v.config.NeoConfig.SideChainId,
-		nil,
 		height,
 		proof,
 		v.signer.Address[:],
-		crossChainMsg,
-		v.signer)
+		crossChainMsg)
 	if err != nil {
-		if strings.Contains(err.Error(), "checkDoneTx, tx already done") {
-			Log.Infof("ImportOuterTransfer: %s", err.Error())
-			return EMPTY, nil
-		} else {
-			return EMPTY, fmt.Errorf("ImportOuterTransfer error: %s, crossChainMsg: %s, proof: %s", err, helper.BytesToHex(crossChainMsg), helper.BytesToHex(proof))
-		}
+		return EMPTY, fmt.Errorf("pack zion tx data error: %v", err)
+	}
+	/*
+		txHash, err := v.polySdk.Native.Ccm.ImportOuterTransfer(
+			v.config.NeoConfig.SideChainId,
+			nil,
+			height,
+			proof,
+			v.signer.Address[:],
+			crossChainMsg,
+			v.signer)
+		txHash, err := v.wallet.SendWithAccount(v.signer, utils.CrossChainManagerContractAddress, big.NewInt(0), 0, nil, nil, data)
+	*/
+	callMsg := ethereum.CallMsg{
+		From: v.signer.Address, To: &utils.CrossChainManagerContractAddress, Gas: 0, GasPrice: gasPrice,
+		Value: big.NewInt(0), Data: data,
+	}
+	gasLimit, err := ethCli.EstimateGas(timerCtx, callMsg)
+	if err != nil {
+		return EMPTY, fmt.Errorf("EstimateGas error: %v", err)
 	}
 
-	return txHash.ToHexString(), nil
+	nonce, err := ethCli.NonceAt(context.Background(), v.signer.Address, nil)
+	if err != nil {
+		return EMPTY, fmt.Errorf("NonceAt error: %v", err)
+	}
+	tx := types.NewTx(&types.LegacyTx{Nonce: nonce, GasPrice: gasPrice, Gas: gasLimit,
+		To: &utils.CrossChainManagerContractAddress, Value: big.NewInt(0), Data: data})
+	s := types.LatestSignerForChainID(v.chainId)
+
+	signedTx, err := types.SignTx(tx, s, v.signer.PrivateKey)
+	if err != nil {
+		return EMPTY, fmt.Errorf("SignTx error: %v", err)
+	}
+	err = ethCli.SendTransaction(timerCtx, signedTx)
+	if err != nil {
+		return EMPTY, fmt.Errorf("SendTransaction error: %v", err)
+	}
+
+	zionHash := signedTx.Hash().Hex()
+	return zionHash, nil
 }
 
-func (v *Voter) chooseClient() *rpc.RpcClient {
-	v.idx = randIdx(len(v.clients))
-	return v.clients[v.idx]
+func (v *Voter) getNonce(addr common.Address) uint64 {
+	for {
+		nonce, err := v.zionClients[v.zidx].GetEthClient().NonceAt(context.Background(), addr, nil)
+		if err != nil {
+			Log.Errorf("NonceAt error: %v", err)
+			sleep()
+			continue
+		}
+		return nonce
+	}
 }

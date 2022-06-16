@@ -19,12 +19,6 @@ var (
 		Usage: "Server config file `<path>`",
 		Value: config.DEFAULT_CONFIG_FILE_NAME,
 	}
-
-	PolyPwd = cli.StringFlag{
-		Name:  "polypwd",
-		Usage: "Password for poly chain wallet",
-		Value: "",
-	}
 )
 
 //GetFlagName deal with short flag, and return the flag name whether flag name have short name

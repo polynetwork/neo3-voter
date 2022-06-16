@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"sync"
 )
 
 const (
@@ -14,28 +15,29 @@ const (
 
 //Config object used by neo-instance
 type Config struct {
-	PolyConfig  PolyConfig
+	sync.Once
+	ZionConfig  ZionConfig
 	NeoConfig   NeoConfig
 	ForceConfig ForceConfig
 	BoltDbPath  string
 }
 
-type PolyConfig struct {
-	RpcUrl                  string
-	EntranceContractAddress string
-	WalletFile              string
+type ZionConfig struct {
+	RestUrlList []string
+	ECCMAddress string
+	NodeKey     string
 }
 
 type NeoConfig struct {
 	SideChainId uint64
 	RpcUrlList  []string
 	CCMC        string // big endian string, like 0x1234567890abcdef123456781234567812345678
-	N2PContract string // neo to poly contract,  big endian string
+	N2ZContract string // neo to zion contract,  big endian string
 }
 
 type ForceConfig struct {
-	PolyStartHeight uint32
-	NeoStartHeight  uint32
+	ZionStartHeight uint64
+	NeoStartHeight  uint64
 }
 
 // DefConfig Default config instance

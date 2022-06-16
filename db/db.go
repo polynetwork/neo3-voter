@@ -51,12 +51,12 @@ func NewBoltDB(filePath string) (*BoltDB, error) {
 	return w, nil
 }
 
-func (w *BoltDB) PutPolyHeight(height uint32) error {
+func (w *BoltDB) PutZionHeight(height uint64) error {
 	w.rwLock.Lock()
 	defer w.rwLock.Unlock()
 
-	raw := make([]byte, 4)
-	binary.LittleEndian.PutUint32(raw, height)
+	raw := make([]byte, 8)
+	binary.LittleEndian.PutUint64(raw, height)
 	return w.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(BKTHeight)
 		err := bucket.Put(PolyHeightKey, raw)
@@ -68,11 +68,11 @@ func (w *BoltDB) PutPolyHeight(height uint32) error {
 	})
 }
 
-func (w *BoltDB) GetPolyHeight() uint32 {
+func (w *BoltDB) GetZionHeight() uint64 {
 	w.rwLock.RLock()
 	defer w.rwLock.RUnlock()
 
-	var height uint32
+	var height uint64
 	_ = w.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(BKTHeight)
 		raw := bucket.Get(PolyHeightKey)
@@ -80,19 +80,19 @@ func (w *BoltDB) GetPolyHeight() uint32 {
 			height = 0
 			return nil
 		}
-		height = binary.LittleEndian.Uint32(raw)
+		height = binary.LittleEndian.Uint64(raw)
 		return nil
 	})
 
 	return height
 }
 
-func (w *BoltDB) PutNeoHeight(height uint32) error {
+func (w *BoltDB) PutNeoHeight(height uint64) error {
 	w.rwLock.Lock()
 	defer w.rwLock.Unlock()
 
-	raw := make([]byte, 4)
-	binary.LittleEndian.PutUint32(raw, height)
+	raw := make([]byte, 8)
+	binary.LittleEndian.PutUint64(raw, height)
 	return w.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(BKTHeight)
 		err := bucket.Put(NeoHeightKey, raw)
@@ -104,11 +104,11 @@ func (w *BoltDB) PutNeoHeight(height uint32) error {
 	})
 }
 
-func (w *BoltDB) GetNeoHeight() uint32 {
+func (w *BoltDB) GetNeoHeight() uint64 {
 	w.rwLock.RLock()
 	defer w.rwLock.RUnlock()
 
-	var height uint32
+	var height uint64
 	_ = w.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(BKTHeight)
 		raw := bucket.Get(NeoHeightKey)
@@ -116,7 +116,7 @@ func (w *BoltDB) GetNeoHeight() uint32 {
 			height = 0
 			return nil
 		}
-		height = binary.LittleEndian.Uint32(raw)
+		height = binary.LittleEndian.Uint64(raw)
 		return nil
 	})
 

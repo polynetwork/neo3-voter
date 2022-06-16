@@ -25,10 +25,9 @@ import (
 
 	"github.com/ontio/ontology-crypto/ec"
 	"github.com/ontio/ontology-crypto/keypair"
-	"github.com/polynetwork/poly/common"
 )
 
-func polyPrivateKey2Hex(pri keypair.PrivateKey) []byte {
+func zionPrivateKey2Hex(pri keypair.PrivateKey) []byte {
 	switch t := pri.(type) {
 	case *ec.PrivateKey:
 		switch t.Algorithm {
@@ -44,7 +43,7 @@ func polyPrivateKey2Hex(pri keypair.PrivateKey) []byte {
 		copy(skEncoded[Nlen-len(skBytes):], skBytes)
 		return skEncoded
 	default:
-		panic("unkown private key type")
+		panic("unknown private key type")
 	}
 }
 
@@ -63,38 +62,4 @@ func sleep() {
 
 func randIdx(size int) int {
 	return int(rand.Uint32()) % size
-}
-
-func parseAuditpath(path []byte) ([]byte, []byte, [][32]byte, error) {
-	source := common.NewZeroCopySource(path)
-	/*
-		l, eof := source.NextUint64()
-		if eof {
-			return nil, nil, nil, nil
-		}
-	*/
-	value, eof := source.NextVarBytes()
-	if eof {
-		return nil, nil, nil, nil
-	}
-	size := int((source.Size() - source.Pos()) / common.UINT256_SIZE)
-	pos := make([]byte, 0)
-	hashs := make([][32]byte, 0)
-	for i := 0; i < size; i++ {
-		f, eof := source.NextByte()
-		if eof {
-			return nil, nil, nil, nil
-		}
-		pos = append(pos, f)
-
-		v, eof := source.NextHash()
-		if eof {
-			return nil, nil, nil, nil
-		}
-		var onehash [32]byte
-		copy(onehash[:], (v.ToArray())[0:32])
-		hashs = append(hashs, onehash)
-	}
-
-	return value, pos, hashs, nil
 }
