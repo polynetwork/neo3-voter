@@ -27,11 +27,11 @@ type Voter struct {
 	zionCcmAddr common.Address
 	zidx        int
 
-	config     *config.Config
-	neoClients []*rpc.RpcClient // neo rpc client
-	idx        int
-	pair       *keys.KeyPair
-
+	config             *config.Config
+	neoClients         []*rpc.RpcClient // neo rpc client
+	idx                int
+	pair               *keys.KeyPair
+	neoNextConsensus   string
 	neoStateRootHeight uint64
 
 	bdb *db.BoltDB

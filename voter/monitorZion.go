@@ -4,17 +4,12 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"math/big"
-	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/contracts/native/cross_chain_manager/common"
 	"github.com/ethereum/go-ethereum/contracts/native/go_abi/signature_manager_abi"
 	"github.com/ethereum/go-ethereum/contracts/native/utils"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/polynetwork/neo3-voter/zion"
 )
@@ -119,7 +114,12 @@ func (v *Voter) handleMakeTxEvents(height uint64) error {
 			return fmt.Errorf("signForNeo error: %v", err)
 		}
 
-		txHash, err := v.commitSig(height, value, sig)
+		txHash, err := v.makeZionTx(utils.SignatureManagerContractAddress,
+			signature_manager_abi.SignatureManagerABI,
+			"addSignature",
+			height,
+			value,
+			sig)
 		if err != nil {
 			return fmt.Errorf("commitSig error: %v", err)
 		}
@@ -128,6 +128,7 @@ func (v *Voter) handleMakeTxEvents(height uint64) error {
 		if err != nil {
 			return fmt.Errorf("handleMakeTxEvents e: %v", err)
 		}
+		Log.Infof("handleMakeTxToNeo, zion height: %d, new txHash: %s", height, txHash)
 	}
 
 	Log.Infof("zion height %d empty: %v", height, empty)
@@ -136,63 +137,5 @@ func (v *Voter) handleMakeTxEvents(height uint64) error {
 
 func (v *Voter) signForNeo(data []byte) (sig []byte, err error) {
 	sig, err = v.pair.Sign(data)
-	return
-}
-
-func (v *Voter) commitSig(height uint64, subject, sig []byte) (txHash string, err error) {
-	duration := 30 * time.Second
-	timerCtx, cancelFunc := context.WithTimeout(context.Background(), duration)
-	defer cancelFunc()
-
-	c := v.zionClients[v.zidx].GetEthClient()
-	gasPrice, err := c.SuggestGasPrice(timerCtx)
-	if err != nil {
-		return EMPTY, fmt.Errorf("SuggestGasPrice error: %v", err)
-	}
-
-	sm, err := abi.JSON(strings.NewReader(signature_manager_abi.SignatureManagerABI))
-	if err != nil {
-		return EMPTY, fmt.Errorf("abi.JSON error: %v", err)
-	}
-
-	data, err := sm.Pack("addSignature", v.signer.Address, v.config.NeoConfig.SideChainId, subject, sig)
-	if err != nil {
-		return EMPTY, fmt.Errorf("pack arguments error: %v", err)
-	}
-
-	callMsg := ethereum.CallMsg{
-		From:     v.signer.Address,
-		To:       &utils.SignatureManagerContractAddress,
-		Gas:      0,
-		GasPrice: gasPrice,
-		Value:    big.NewInt(0),
-		Data:     data,
-	}
-	gasLimit, err := c.EstimateGas(timerCtx, callMsg)
-	if err != nil {
-		return EMPTY, fmt.Errorf("EstimateGas error: %v", err)
-	}
-
-	nonce := v.getNonce(v.signer.Address)
-	tx := types.NewTx(&types.LegacyTx{
-		Nonce:    nonce,
-		GasPrice: gasPrice,
-		Gas:      gasLimit,
-		To:       &utils.SignatureManagerContractAddress,
-		Value:    big.NewInt(0),
-		Data:     data,
-	})
-	s := types.LatestSignerForChainID(v.chainId)
-	signedTx, err := types.SignTx(tx, s, v.signer.PrivateKey)
-	if err != nil {
-		return EMPTY, fmt.Errorf("SignTx error: %v", err)
-	}
-
-	err = c.SendTransaction(timerCtx, signedTx)
-	if err != nil {
-		return EMPTY, fmt.Errorf("SendTransaction error: %v", err)
-	}
-	txHash = signedTx.Hash().Hex()
-	Log.Infof("commitSig, height: %d, txHash: %s", height, txHash)
 	return
 }

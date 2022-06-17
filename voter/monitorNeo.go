@@ -8,9 +8,11 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/contracts/native/go_abi/cross_chain_manager_abi"
+	"github.com/ethereum/go-ethereum/contracts/native/go_abi/header_sync_abi"
 	common2 "github.com/ethereum/go-ethereum/contracts/native/header_sync/common"
 	"github.com/ethereum/go-ethereum/contracts/native/utils"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/joeqian10/neo3-gogogo/block"
 	"github.com/joeqian10/neo3-gogogo/crypto"
 	"github.com/joeqian10/neo3-gogogo/helper"
 	"github.com/joeqian10/neo3-gogogo/io"
@@ -30,6 +32,10 @@ var NeoUsefulBlockNum = uint64(1)
 func (v *Voter) pickNeoClient() *rpc.RpcClient {
 	v.idx = randIdx(len(v.zionClients))
 	return v.neoClients[v.idx]
+}
+
+func (v *Voter) getNeoBlockHeader() {
+
 }
 
 func (v *Voter) getNeoStartHeight() (startHeight uint64) {
@@ -83,11 +89,34 @@ RETRY:
 func (v *Voter) monitorNeo() {
 	nextHeight := v.getNeoStartHeight()
 
+	c := v.neoClients[v.idx] // use the reliable one
+
+	if nextHeight == 0 {
+		v.neoNextConsensus = EMPTY
+	} else {
+	GETBLOCK:
+		response := c.GetBlock(strconv.Itoa(int(nextHeight - 1))) // get the previous peers
+		if response.HasError() {
+			Log.Errorf("neoSdk.GetBlockByIndex error: %s, retrying", response.GetErrorInfo())
+			c = v.pickNeoClient() // change to another client
+			sleep()
+			goto GETBLOCK
+		}
+		block := response.Result
+		if block.Hash == "" {
+			Log.Errorf("neoSdk.GetBlock response is empty, retrying")
+			c = v.pickNeoClient() // change to another client
+			sleep()
+			goto GETBLOCK
+		}
+		v.neoNextConsensus = block.NextConsensus // record the previous peers
+	}
+
 	for {
-		c := v.pickNeoClient()
 		response := c.GetBlockCount()
 		if response.HasError() {
 			Log.Warnf("GetBlockCount failed: %s", response.GetErrorInfo())
+			c = v.pickNeoClient() // change to another client
 			sleep()
 			continue
 		}
@@ -99,9 +128,17 @@ func (v *Voter) monitorNeo() {
 
 		for nextHeight < height-NeoUsefulBlockNum {
 			Log.Infof("process neo height: %d", nextHeight)
-			err := v.fetchLockDepositEvents(nextHeight)
+			err := v.handleNeoLockEvents(nextHeight)
 			if err != nil {
-				Log.Warnf("fetchLockDepositEvents failed: %v", err)
+				Log.Errorf("handleNeoLockEvents error: %v, retrying", err)
+				c = v.pickNeoClient() // change to another client
+				sleep()
+				continue
+			}
+			err = v.syncHeaderToZion(nextHeight)
+			if err != nil {
+				Log.Errorf("syncHeaderToZion error: %v, retrying", err)
+				c = v.pickNeoClient() // change to another client
 				sleep()
 				continue
 			}
@@ -115,8 +152,8 @@ func (v *Voter) monitorNeo() {
 	}
 }
 
-func (v *Voter) fetchLockDepositEvents(height uint64) error {
-	c := v.pickNeoClient()
+func (v *Voter) handleNeoLockEvents(height uint64) error {
+	c := v.neoClients[v.idx]
 	blockResponse := c.GetBlock(strconv.Itoa(int(height)))
 	if blockResponse.HasError() {
 		return fmt.Errorf("neoSdk.GetBlockByIndex error: %s", blockResponse.GetErrorInfo())
@@ -174,7 +211,7 @@ func (v *Voter) fetchLockDepositEvents(height uint64) error {
 						return fmt.Errorf("base64decode key error: %s", err)
 					}
 					key = helper.BytesToHex(temp)
-					//get relay chain sync height
+					//get the neo chain synced height on zion
 					latestSyncHeight, err := v.GetLatestSyncHeightOnZion(v.config.NeoConfig.SideChainId)
 					if err != nil {
 						return fmt.Errorf("GetCurrentRelayChainSyncHeight error: %s", err)
@@ -185,23 +222,21 @@ func (v *Voter) fetchLockDepositEvents(height uint64) error {
 					} else {
 						passed = latestSyncHeight
 					}
-					Log.Infof("process neo tx: " + tx.Hash)
-					txHash, err := v.commitVote(key, passed)
+					Log.Infof("process neo tx: %s", tx.Hash)
+					txHash, err := v.syncProofToZion(key, passed)
 					if err != nil {
 						Log.Errorf("--------------------------------------------------")
-						Log.Errorf("commitVote error: %s", err)
+						Log.Errorf("syncProofToZion error: %s", err)
 						Log.Errorf("neoHeight: %d, neoTxHash: %s", height, tx.Hash)
 						Log.Errorf("--------------------------------------------------")
 						return err
 					}
-					if txHash == EMPTY {
-						continue
-					}
 					err = v.waitTx(txHash)
 					if err != nil {
-						Log.Errorf("waitTx failed: %v, txHash: %s", err, txHash)
+						Log.Errorf("waitTx failed: %v, zionTxHash: %s", err, txHash)
 						return err
 					}
+					Log.Infof("neo tx: %s handled, zion tx: %s", tx.Hash, txHash)
 				}
 			NEXT:
 			} // notification
@@ -210,7 +245,63 @@ func (v *Voter) fetchLockDepositEvents(height uint64) error {
 	return nil
 }
 
-func (v *Voter) commitVote(key string, height uint64) (string, error) {
+func (v *Voter) syncHeaderToZion(height uint64) error {
+	latestHeight, err := v.GetLatestSyncHeightOnZion(v.config.NeoConfig.SideChainId)
+	if height <= latestHeight {
+		return nil
+	}
+
+	//Get NEO BlockHeader for syncing
+	c := v.neoClients[v.idx]
+GETBLOCKHEADER:
+	response := c.GetBlockHeader(strconv.Itoa(int(height)))
+	if response.HasError() {
+		Log.Errorf("GetBlockHeader error: %v, retrying", response.GetErrorInfo())
+		c = v.pickNeoClient() // change to another client
+		sleep()
+		goto GETBLOCKHEADER
+	}
+	rpcBH := response.Result
+	if rpcBH.Hash == "" {
+		Log.Errorf("GetBlockHeader response is empty, retrying")
+		c = v.pickNeoClient() // change to another client
+		sleep()
+		goto GETBLOCKHEADER
+	}
+	if rpcBH.NextConsensus == v.neoNextConsensus {
+		return nil
+	}
+	blockHeader, err := block.NewBlockHeaderFromRPC(&rpcBH)
+	if err != nil {
+		Log.Errorf("NewBlockHeaderFromRPC error: %v, retrying", response.GetErrorInfo())
+		c = v.pickNeoClient()
+		sleep()
+		goto GETBLOCKHEADER
+	}
+
+	buff := io.NewBufBinaryWriter()
+	blockHeader.Serialize(buff.BinaryWriter)
+	header := buff.Bytes()
+
+	txHash, err := v.makeZionTx(utils.HeaderSyncContractAddress,
+		header_sync_abi.HeaderSyncABI,
+		"syncBlockHeader",
+		v.config.NeoConfig.SideChainId,
+		v.signer.Address,
+		[][]byte{header})
+	if err != nil {
+		return fmt.Errorf("makeZionTx error: %v", err)
+	}
+	err = v.waitTx(txHash)
+	if err != nil {
+		Log.Errorf("waitTx failed: %v, zionTxHash: %s", err, txHash)
+		return err
+	}
+	Log.Infof("syncHeaderToZion done, zionTxHash: %v", txHash)
+	return nil
+}
+
+func (v *Voter) syncProofToZion(key string, height uint64) (string, error) {
 	c := v.neoClients[v.idx]
 	//get current state height
 	var stateHeight uint64 = 0
@@ -276,7 +367,14 @@ func (v *Voter) commitVote(key string, height uint64) (string, error) {
 	//Log.Infof("value: %s", helper.BytesToHex(value))
 
 	// sending SyncProof transaction to zion
-	zionHash, err := v.makeZionTx(height, proof, crossChainMsg)
+	zionHash, err := v.makeZionTx(utils.CrossChainManagerContractAddress,
+		cross_chain_manager_abi.CrossChainManagerABI,
+		"importOuterTransfer",
+		v.config.NeoConfig.SideChainId,
+		height,
+		proof,
+		v.signer.Address[:],
+		crossChainMsg) // todo, arg position may be changed
 	if err != nil {
 		if strings.Contains(err.Error(), "tx already done") {
 			Log.Infof("tx already imported, source tx hash: %s", helper.BytesToHex(cctp.TxHash))
@@ -289,7 +387,7 @@ func (v *Voter) commitVote(key string, height uint64) (string, error) {
 	return zionHash, nil
 }
 
-func (v *Voter) makeZionTx(height uint64, proof []byte, crossChainMsg []byte) (string, error) {
+func (v *Voter) makeZionTx(contractAddress common.Address, contractAbi string, method string, args ...interface{}) (string, error) {
 	duration := time.Second * 30
 	timerCtx, cancelFunc := context.WithTimeout(context.Background(), duration)
 	defer cancelFunc()
@@ -299,16 +397,11 @@ func (v *Voter) makeZionTx(height uint64, proof []byte, crossChainMsg []byte) (s
 	if err != nil {
 		return EMPTY, fmt.Errorf("SuggestGasPrice error: %v", err)
 	}
-	ccmAbi, err := abi.JSON(strings.NewReader(cross_chain_manager_abi.CrossChainManagerABI))
+	conAbi, err := abi.JSON(strings.NewReader(contractAbi))
 	if err != nil {
 		return EMPTY, fmt.Errorf("abi.JSON CrossChainManagerABI error: %v", err)
 	}
-	data, err := ccmAbi.Pack("importOuterTransfer",
-		v.config.NeoConfig.SideChainId,
-		height,
-		proof,
-		v.signer.Address[:],
-		crossChainMsg)
+	data, err := conAbi.Pack(method, args)
 	if err != nil {
 		return EMPTY, fmt.Errorf("pack zion tx data error: %v", err)
 	}
@@ -324,8 +417,12 @@ func (v *Voter) makeZionTx(height uint64, proof []byte, crossChainMsg []byte) (s
 		txHash, err := v.wallet.SendWithAccount(v.signer, utils.CrossChainManagerContractAddress, big.NewInt(0), 0, nil, nil, data)
 	*/
 	callMsg := ethereum.CallMsg{
-		From: v.signer.Address, To: &utils.CrossChainManagerContractAddress, Gas: 0, GasPrice: gasPrice,
-		Value: big.NewInt(0), Data: data,
+		From:     v.signer.Address,
+		To:       &contractAddress,
+		Gas:      0,
+		GasPrice: gasPrice,
+		Value:    big.NewInt(0),
+		Data:     data,
 	}
 	gasLimit, err := ethCli.EstimateGas(timerCtx, callMsg)
 	if err != nil {
@@ -336,8 +433,15 @@ func (v *Voter) makeZionTx(height uint64, proof []byte, crossChainMsg []byte) (s
 	if err != nil {
 		return EMPTY, fmt.Errorf("NonceAt error: %v", err)
 	}
-	tx := types.NewTx(&types.LegacyTx{Nonce: nonce, GasPrice: gasPrice, Gas: gasLimit,
-		To: &utils.CrossChainManagerContractAddress, Value: big.NewInt(0), Data: data})
+	tx := types.NewTx(
+		&types.LegacyTx{
+			Nonce:    nonce,
+			GasPrice: gasPrice,
+			Gas:      gasLimit,
+			To:       &contractAddress,
+			Value:    big.NewInt(0),
+			Data:     data,
+		})
 	s := types.LatestSignerForChainID(v.chainId)
 
 	signedTx, err := types.SignTx(tx, s, v.signer.PrivateKey)
