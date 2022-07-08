@@ -95,7 +95,8 @@ func (v *Voter) handleMakeTxEvents(height uint64) error {
 	for events.Next() {
 		evt := events.Event
 		if evt.Raw.Address != v.zionCcmAddr {
-			Log.Warnf("event source contract invalid: %s, expect: %s, height: %d", evt.Raw.Address.Hex(), v.zionCcmAddr.Hex(), height)
+			Log.Warnf("event source contract invalid: %s, expect: %s, height: %d",
+				evt.Raw.Address.Hex(), v.zionCcmAddr.Hex(), height)
 			continue
 		}
 		empty = false

@@ -111,6 +111,7 @@ func (v *Voter) Start() {
 	err := v.init()
 	if err != nil {
 		Log.Fatalf("Voter.init failed: %v", err)
+		panic(err)
 	}
 	var wg sync.WaitGroup
 	GoFunc(&wg, v.monitorNeo)

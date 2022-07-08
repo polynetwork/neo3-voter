@@ -18,9 +18,9 @@ var Log = log.Log
 
 func setupApp() *cli.App {
 	app := cli.NewApp()
-	app.Usage = "NEO3 Voter"
+	app.Usage = "neo3-voter"
 	app.Action = start
-	app.Copyright = "Copyright in 2022 The NEO Project"
+	app.Copyright = "Copyright in 2022 The Neo Project"
 	app.Flags = []cli.Flag{
 		cmd.ConfigPathFlag,
 	}
@@ -57,7 +57,7 @@ func waitToExit() {
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
 		for sig := range sc {
-			Log.Infof("Neo Relayer received exit signal: %v.", sig.String())
+			Log.Infof("neo voter received exit signal: %v.", sig.String())
 			close(exit)
 			break
 		}

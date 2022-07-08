@@ -25,7 +25,11 @@ import (
 	"time"
 )
 
-const EMPTY = ""
+const (
+	SYNC_BLOCK_HEADER     = "syncBlockHeader"
+	IMPORT_OUTER_TRANSFER = "importOuterTransfer"
+	EMPTY                 = ""
+)
 
 var NeoUsefulBlockNum = uint64(1)
 
@@ -54,6 +58,7 @@ RPC:
 	response := c.GetBlockCount()
 	if response.HasError() {
 		Log.Errorf("GetBlockCount error: %s, client: %s", response.GetErrorInfo(), c.Endpoint.String())
+		sleep()
 		goto RPC
 	}
 	startHeight = uint64(response.Result - 1)
@@ -64,12 +69,13 @@ RPC:
 func (v *Voter) GetLatestSyncHeightOnZion(neoChainID uint64) (uint64, error) {
 	var id [8]byte
 	binary.LittleEndian.PutUint64(id[:], neoChainID)
-RETRY:
+GETSTORAGE:
 	c := v.pickZionClient()
 	heightBytes, err := c.GetStorage(utils.HeaderSyncContractAddress, append([]byte(common2.CURRENT_HEADER_HEIGHT), id[:]...))
 	if err != nil {
 		Log.Errorf("getStorage error: %v, retrying", err)
-		goto RETRY
+		sleep()
+		goto GETSTORAGE
 	}
 	if heightBytes == nil {
 		return 0, fmt.Errorf("get side chain height failed, height store is nil")
@@ -285,7 +291,7 @@ GETBLOCKHEADER:
 
 	txHash, err := v.makeZionTx(utils.HeaderSyncContractAddress,
 		header_sync_abi.HeaderSyncABI,
-		"syncBlockHeader",
+		SYNC_BLOCK_HEADER,
 		v.config.NeoConfig.SideChainId,
 		v.signer.Address,
 		[][]byte{header})
@@ -294,7 +300,7 @@ GETBLOCKHEADER:
 	}
 	err = v.waitTx(txHash)
 	if err != nil {
-		Log.Errorf("waitTx failed: %v, zionTxHash: %s", err, txHash)
+		Log.Errorf("waitTx error: %v, zionTxHash: %s", err, txHash)
 		return err
 	}
 	Log.Infof("syncHeaderToZion done, zionTxHash: %v", txHash)
@@ -369,7 +375,7 @@ func (v *Voter) syncProofToZion(key string, height uint64) (string, error) {
 	// sending SyncProof transaction to zion
 	zionHash, err := v.makeZionTx(utils.CrossChainManagerContractAddress,
 		cross_chain_manager_abi.CrossChainManagerABI,
-		"importOuterTransfer",
+		IMPORT_OUTER_TRANSFER,
 		v.config.NeoConfig.SideChainId,
 		height,
 		proof,
@@ -433,15 +439,14 @@ func (v *Voter) makeZionTx(contractAddress common.Address, contractAbi string, m
 	if err != nil {
 		return EMPTY, fmt.Errorf("NonceAt error: %v", err)
 	}
-	tx := types.NewTx(
-		&types.LegacyTx{
-			Nonce:    nonce,
-			GasPrice: gasPrice,
-			Gas:      gasLimit,
-			To:       &contractAddress,
-			Value:    big.NewInt(0),
-			Data:     data,
-		})
+	tx := types.NewTx(&types.LegacyTx{
+		Nonce:    nonce,
+		GasPrice: gasPrice,
+		Gas:      gasLimit,
+		To:       &contractAddress,
+		Value:    big.NewInt(0),
+		Data:     data,
+	})
 	s := types.LatestSignerForChainID(v.chainId)
 
 	signedTx, err := types.SignTx(tx, s, v.signer.PrivateKey)
