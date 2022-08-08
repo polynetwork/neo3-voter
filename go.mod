@@ -1,6 +1,6 @@
 module github.com/polynetwork/neo3-voter
 
-go 1.17
+go 1.18
 
 require (
 	github.com/boltdb/bolt v1.3.1
@@ -12,5 +12,6 @@ require (
 )
 
 replace (
-	github.com/ethereum/go-ethereum v1.10.11 => github.com/polynetwork/Zion v0.0.2-0.20220610105057-6e3d53dde057
+	github.com/ethereum/go-ethereum v1.10.11 => github.com/dylenfu/Zion v0.0.0-20220804061921-6f73ae831a77
+	github.com/tendermint/tm-db/064 => github.com/tendermint/tm-db v0.6.4
 )

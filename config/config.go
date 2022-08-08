@@ -31,12 +31,9 @@ type ZionConfig struct {
 type NeoConfig struct {
 	SideChainId uint64
 	RpcUrlList  []string
-	CCMC        string // big endian string, like 0x1234567890abcdef123456781234567812345678
-	N2ZContract string // neo to zion contract,  big endian string
 }
 
 type ForceConfig struct {
-	ZionStartHeight uint64
 	NeoStartHeight  uint64
 }
 

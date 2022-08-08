@@ -1,0 +1,15 @@
+{
+  "ZionConfig": {
+    "RpcUrlList": [""],
+    "ECCMAddress": "",
+    "NodeKey": ""
+  },
+  "NeoConfig": {
+    "SideChainID": 12345678,
+    "RpcUrlList": [""]
+  },
+  "ForceConfig": {
+    "NeoStartHeight": 0
+  },
+  "BoltDbPath": "boltdb"
+}

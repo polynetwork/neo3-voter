@@ -3,28 +3,28 @@ package voter
 import (
 	"context"
 	"fmt"
+	"math/big"
+	"os"
+	"sync"
+	"time"
+
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/contracts/native/go_abi/cross_chain_manager_abi"
 	"github.com/joeqian10/neo3-gogogo/keys"
 	"github.com/joeqian10/neo3-gogogo/rpc"
 	"github.com/polynetwork/neo3-voter/config"
 	"github.com/polynetwork/neo3-voter/db"
 	"github.com/polynetwork/neo3-voter/log"
 	"github.com/polynetwork/neo3-voter/zion"
-	"math/big"
-	"os"
-	"sync"
-	"time"
 )
 
 var Log = log.Log
 
 type Voter struct {
-	chainId     *big.Int
+	zionChainId *big.Int
 	signer      *zion.ZionSigner
 	zionClients []*zion.ZionTools
-	zionCCMs    []*cross_chain_manager_abi.CrossChainManager
-	zionCcmAddr common.Address
+	//zionCCMs    []*cross_chain_manager_abi.CrossChainManager
+	//zionCcmAddr common.Address
 	zidx        int
 
 	config             *config.Config
@@ -45,17 +45,17 @@ func (v *Voter) init() (err error) {
 	// create a zion signer
 	signer, err := zion.NewZionSigner(v.config.ZionConfig.NodeKey)
 	if err != nil {
-		panic(err)
+		panic(any(err))
 	}
 	v.signer = signer
 
 	// use zion's private key and neo's hash and curve
-	pkBytes := zionPrivateKey2Hex(v.signer.PrivateKey)
-	pair, err := keys.NewKeyPair(pkBytes)
-	if err != nil {
-		return
-	}
-	v.pair = pair
+	//pkBytes := zionPrivateKey2Hex(v.signer.PrivateKey)
+	//pair, err := keys.NewKeyPair(pkBytes)
+	//if err != nil {
+	//	return
+	//}
+	//v.pair = pair
 
 	// fill neo clients
 	for _, url := range v.config.NeoConfig.RpcUrlList {
@@ -74,9 +74,9 @@ func (v *Voter) init() (err error) {
 	start := time.Now()
 	chainID, err := v.zionClients[0].GetChainID() // use the first one
 	if err != nil {
-		panic("zionSdk.GetChainID " + err.Error())
+		panic(any("zionSdk.GetChainID " + err.Error()))
 	}
-	v.chainId = chainID
+	v.zionChainId = chainID
 	Log.Infof("GetChainID() took %v", time.Now().Sub(start).String())
 
 	// add db
@@ -95,14 +95,14 @@ func (v *Voter) init() (err error) {
 	v.bdb = bdb
 
 	// ccm
-	v.zionCcmAddr = common.HexToAddress(v.config.ZionConfig.ECCMAddress)
-	for _, z := range v.zionClients {
-		t, err := cross_chain_manager_abi.NewCrossChainManager(v.zionCcmAddr, z.GetEthClient())
-		if err != nil {
-			return fmt.Errorf("NewCrossChainManager error: %v", err)
-		}
-		v.zionCCMs = append(v.zionCCMs, t)
-	}
+	//v.zionCcmAddr = common.HexToAddress(v.config.ZionConfig.ECCMAddress)
+	//for _, z := range v.zionClients {
+	//	t, err := cross_chain_manager_abi.NewCrossChainManager(v.zionCcmAddr, z.GetEthClient())
+	//	if err != nil {
+	//		return fmt.Errorf("NewCrossChainManager error: %v", err)
+	//	}
+	//	v.zionCCMs = append(v.zionCCMs, t)
+	//}
 
 	return
 }
@@ -111,11 +111,11 @@ func (v *Voter) Start() {
 	err := v.init()
 	if err != nil {
 		Log.Fatalf("Voter.init failed: %v", err)
-		panic(err)
+		panic(any(err))
 	}
 	var wg sync.WaitGroup
 	GoFunc(&wg, v.monitorNeo)
-	GoFunc(&wg, v.monitorZion)
+	//GoFunc(&wg, v.monitorZion) // neo3-relayer should do this
 	wg.Wait()
 }
 
